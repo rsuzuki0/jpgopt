@@ -1,0 +1,35 @@
+#!/bin/sh -
+
+temp=$(mktemp -dt JPGopt)
+
+for i in "$@"
+do
+if exiftool -f -j "$i" | grep -q 'Compressed by jpeg-recompress'
+  then
+    echo "Already compressed! Skipping $i"
+    exit 0
+fi
+
+  ls -sk "$i"
+  tmpfile=$temp/`basename "$i"`
+  tmpfile_opt=$temp/`basename "$i"`_opt
+
+  if ! jpeg-recompress --accurate  --quality high -m smallfry  "$i" "$tmpfile"
+  then
+    jpeg-recompress --accurate --quality high --min 60 "$i" "$tmpfile"
+  fi
+
+  exiv2 -dtx  "$tmpfile"
+  ~/BULK/Build/jpegcrop/jpeg-9a/jpegtran -optimize -progressive -copy all "$tmpfile" > "$tmpfile_opt"
+
+  sf=$(stat -f%z "$tmpfile")
+  sf_opt=$(stat -f%z "$tmpfile_opt")
+  if [ "$sf" -lt "$sf_opt" ]
+	then
+      echo "Optimized file smaller!   " $sf_opt
+      mv "$tmpfile_opt" "$i"
+    else
+      echo "Unoptimized file smaller!!!!" $sf
+      mv "$tmpfile" "$i"
+  fi
+done
