@@ -1,3 +1,81 @@
-#!/bin/sh -
-# ls -1 "$@" | xargs -L 1 -P 8 jpgopt-single
-find  "$@" -print0 | xargs -0 -L 1 -P 8 jpgopt-single; noti -t "JPG optimizer" -m "All done"
+#!/bin/bash -
+
+# re-encode JPEG files in the argument using jpeg-recompress, 8 processes in parallel
+# requires jpeg-recompress, exiv2, jpegtran, noti in $PATH.
+# Author: Ryuji Suzuki  https://suzuki.photo
+
+set -o nounset
+set -o errexit
+
+temp=$(mktemp -dt JPGopt)
+export temp
+
+jpgopt_single() {
+  if exiftool -f -j "$1" | grep -q 'Compressed by jpeg-recompress' ; then
+    echo "Skipping $1 ... already compressed."
+    return 0
+  fi
+
+  ls -sk "$1"
+
+  # re-compressed and EXIF-stripped file written to:
+  local tmpfile
+  tmpfile="$temp/$(basename "$1")"
+
+  # re-encode the JPEG with smallfry first, as it is efficient
+  # if smallfry fails with segmentation fault, retry with SSIM
+  # there were some bug fixes which reduced this error frequency, but it can still occur infrequently
+  if ! jpeg-recompress --accurate  --quality high -m smallfry  "$1" "$tmpfile" ; then
+    if ! jpeg-recompress --accurate --quality high --min 60 "$1" "$tmpfile" ; then
+      echo 'ERROR! jpeg-recompress not found in $PATH!'
+      exit 1
+    else
+      echo "Warning! Smallfry failed with $1!!"
+    fi
+  fi
+
+  # strip EXIF except for the author / copyright tags
+  # this command writes over the specified file
+  if ! exiv2 -dtx  "$tmpfile" ; then
+    echo "ERROR! exiv2 not found!"
+    exit 1
+  fi
+
+  # re-compressed, EXIF-stripped and progressive encoding file written to:
+  local tmpfile_opt
+  tmpfile_opt="$tmpfile"_opt
+
+  # progressive encoding
+  if ! jpegtran -optimize -progressive -copy all "$tmpfile" > "$tmpfile_opt" ; then
+    echo "ERROR! jpegtran not found: keep going using non-progressive file!"
+    mv "$tmpfile" "$1"
+    return 0
+  fi
+
+  # trust but verify, checking file sizes because some files get bigger in progressive encoding!
+  local sf
+  local sf_opt
+  sf=$(stat -f%z "$tmpfile")
+  sf_opt=$(stat -f%z "$tmpfile_opt")
+  if (( sf > sf_opt )) ; then
+    mv "$tmpfile_opt" "$1"
+    echo "Completing $1 ... Progressive file smaller!     $sf_opt"
+  else
+    mv "$tmpfile" "$1"
+    echo "Completing $1 ... Non-progressive file smaller!!!!     $sf"
+  fi
+  return 0
+}
+
+export -f jpgopt_single
+
+if [[ -z "$*" ]] ; then
+  echo "Usage: $0 file1.jpg [file2.jpg, ...]"
+  exit 1
+fi
+
+find "$@" -print0 | xargs -0 -L 1 -P 8 -I {} bash -c 'jpgopt_single "$@"' _ {}
+
+if ! noti -t "JPG optimizer" -m "All done" ; then
+	echo "All done"
+fi
