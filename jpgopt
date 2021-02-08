@@ -2,6 +2,7 @@
 
 # re-encode JPEG files in the argument using jpeg-recompress, 8 processes in parallel
 # requires jpeg-recompress, exiv2, jpegtran, noti in $PATH.
+# https://github.com/rsuzuki0/jpgopt
 # Author: Ryuji Suzuki  https://suzuki.photo
 
 set -o nounset
